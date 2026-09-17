@@ -131,24 +131,44 @@ function isExcluded(x: number, y: number, exclusions: ReferenceCrop[]) {
   );
 }
 
+function isOutsidePrimaryJaw(normalizedX: number, normalizedY: number) {
+  if (normalizedY < 0.2 || normalizedY > 0.68) return false;
+  const progress = Math.min(
+    1,
+    Math.max(0, (normalizedY - 0.2) / 0.48),
+  );
+  const eased = progress * progress * (3 - 2 * progress);
+  const isRight = normalizedX >= 0.485;
+  const templeHalfWidth = isRight ? 0.305 : 0.36;
+  const jawHalfWidth = templeHalfWidth * (1 - eased) + 0.105 * eased;
+  return Math.abs(normalizedX - 0.485) > jawHalfWidth;
+}
+
 function isInsideHumanoidEnvelope(
   localX: number,
   localY: number,
   crop: ReferenceCrop,
 ) {
-  const normalizedX =
-    (localX / Math.max(1, crop.width - 1) - 0.5) * 2;
+  const normalizedX = localX / Math.max(1, crop.width - 1);
+  const centeredHeadX = (normalizedX - 0.485) * 2;
   const normalizedY = localY / Math.max(1, crop.height - 1);
   if (normalizedY <= 0.64) {
-    const headX = normalizedX / 0.37;
+    const horizontalRadius = centeredHeadX > 0 ? 0.285 : 0.34;
+    const headX = centeredHeadX / horizontalRadius;
     const headY = (normalizedY - 0.32) / 0.37;
-    return headX * headX + headY * headY <= 1.2;
+    return headX * headX + headY * headY <= 1.18;
   }
-  const shoulderHalfWidth = Math.min(
-    0.98,
-    0.28 + (normalizedY - 0.64) * 2.05,
+  const shoulderProgress = Math.min(
+    1,
+    Math.max(0, (normalizedY - 0.68) / 0.32),
   );
-  return Math.abs(normalizedX) <= shoulderHalfWidth;
+  const roundedShoulder = Math.pow(
+    Math.sin(shoulderProgress * Math.PI * 0.5),
+    1.55,
+  );
+  const shoulderHalfWidth = 0.21 + roundedShoulder * 0.77;
+  const centeredBodyX = (normalizedX - 0.485) * 2;
+  return Math.abs(centeredBodyX) <= shoulderHalfWidth;
 }
 
 function pixelLuminance(
@@ -255,6 +275,33 @@ function nearbySupport(
   return support;
 }
 
+function mirroredCyanSupport(
+  labels: Uint8Array,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+) {
+  const centerPixel = (width - 1) * 0.485;
+  const mirroredX = Math.round(centerPixel * 2 - x);
+  let support = 0;
+  for (let offsetY = -3; offsetY <= 3; offsetY += 1) {
+    const sampleY = y + offsetY;
+    if (sampleY < 0 || sampleY >= height) continue;
+    for (let offsetX = -3; offsetX <= 3; offsetX += 1) {
+      const sampleX = mirroredX + offsetX;
+      if (sampleX < 0 || sampleX >= width) continue;
+      if (
+        labels[sampleY * width + sampleX] ===
+        PARTICLE_GROUP.CYAN_STRUCTURE + 1
+      ) {
+        support += 1;
+      }
+    }
+  }
+  return support;
+}
+
 function buildDistanceField(
   labels: Uint8Array,
   width: number,
@@ -348,6 +395,12 @@ function collectCandidates(
         maxRgbThreshold,
       );
       if (group === null) continue;
+      if (
+        group === PARTICLE_GROUP.CYAN_STRUCTURE &&
+        isOutsidePrimaryJaw(normalizedX, normalizedY)
+      ) {
+        continue;
+      }
       const importance =
         luminance * 0.36 +
         maxRgb * 0.2 +
@@ -381,9 +434,33 @@ function collectCandidates(
       const pixelX = crop.x + localX;
       if (isExcluded(pixelX, pixelY, exclusions)) continue;
       if (!isInsideHumanoidEnvelope(localX, localY, crop)) continue;
+      const normalizedX = localX / Math.max(1, crop.width - 1);
+      const normalizedY = localY / Math.max(1, crop.height - 1);
+      if (
+        isOutsidePrimaryJaw(normalizedX, normalizedY)
+      ) {
+        continue;
+      }
       const index = localY * crop.width + localX;
       const strong = strongPixels[index];
       if (strong) {
+        const facialPerimeter =
+          normalizedY >= 0.12 &&
+          normalizedY <= 0.64 &&
+          normalizedX - 0.485 >= 0.085;
+        if (
+          strong.group === PARTICLE_GROUP.CYAN_STRUCTURE &&
+          facialPerimeter &&
+          mirroredCyanSupport(
+            labels,
+            crop.width,
+            crop.height,
+            localX,
+            localY,
+          ) < 5
+        ) {
+          continue;
+        }
         if (
           strong.group === PARTICLE_GROUP.CYAN_STRUCTURE &&
           nearbySupport(labels, crop.width, crop.height, localX, localY, 2) <= 3
@@ -423,8 +500,6 @@ function collectCandidates(
       const group = immediateStructuralDetail
         ? nearestGroup
         : PARTICLE_GROUP.OUTER_DUST;
-      const normalizedX = localX / Math.max(1, crop.width - 1);
-      const normalizedY = localY / Math.max(1, crop.height - 1);
       const faceInterior =
         Math.pow((normalizedX - 0.5) / 0.235, 2) +
           Math.pow((normalizedY - 0.35) / 0.32, 2) <
@@ -723,10 +798,59 @@ export async function buildParticleTargets(
   selectedByGroup.forEach((groupCandidates, groupIndex) => {
     groupCandidates.forEach((pixel) => {
       const offset = particleIndex * 3;
-      const targetX =
-        (pixel.x / Math.max(1, crop.width - 1) - 0.5) * worldWidth;
-      const targetY =
-        (0.5 - pixel.y / Math.max(1, crop.height - 1)) * worldHeight;
+      const normalizedTargetX =
+        pixel.x / Math.max(1, crop.width - 1);
+      const normalizedTargetY =
+        pixel.y / Math.max(1, crop.height - 1);
+      let targetX = (normalizedTargetX - 0.5) * worldWidth;
+      let targetY = (0.5 - normalizedTargetY) * worldHeight;
+      if (
+        normalizedTargetY < 0.17 &&
+        (groupIndex === PARTICLE_GROUP.CYAN_STRUCTURE ||
+          groupIndex === PARTICLE_GROUP.OUTER_DUST)
+      ) {
+        const crownHalfWidth = normalizedTargetX >= 0.485 ? 0.145 : 0.17;
+        const crownX = Math.min(
+          1,
+          Math.abs(normalizedTargetX - 0.485) / crownHalfWidth,
+        );
+        const crownArc = Math.sqrt(Math.max(0, 1 - crownX * crownX));
+        const upperBand = 1 - Math.min(1, normalizedTargetY / 0.17);
+        const upperBandEase =
+          upperBand * upperBand * (3 - 2 * upperBand);
+        targetY -=
+          (0.19 - crownArc * 0.085) * upperBandEase;
+      }
+      if (groupIndex !== PARTICLE_GROUP.GOLD_NECK) {
+        const headDropProgress = Math.min(
+          1,
+          Math.max(0, (0.72 - normalizedTargetY) / 0.14),
+        );
+        const headDropEase =
+          headDropProgress *
+          headDropProgress *
+          (3 - 2 * headDropProgress);
+        targetY -= headDropEase * 0.14;
+      }
+      const shoulderProgress = Math.min(
+        1,
+        Math.max(0, (normalizedTargetY - 0.64) / 0.36),
+      );
+      const lateralProgress = Math.min(
+        1,
+        Math.max(0, (Math.abs(normalizedTargetX - 0.5) - 0.1) / 0.4),
+      );
+      const lateralCurve =
+        Math.pow(Math.sin(lateralProgress * Math.PI * 0.5), 2.2);
+      if (
+        groupIndex === PARTICLE_GROUP.CYAN_STRUCTURE ||
+        groupIndex === PARTICLE_GROUP.OUTER_DUST
+      ) {
+        targetY -=
+          shoulderProgress * (0.035 + lateralCurve * 0.36);
+        targetX *=
+          1 + shoulderProgress * (0.035 + lateralCurve * 0.065);
+      }
       targetPosition[offset] = targetX;
       targetPosition[offset + 1] = targetY;
       color[offset] = pixel.r;
@@ -737,12 +861,12 @@ export async function buildParticleTargets(
       brightness[particleIndex] = visualBrightness;
       const baseSize =
         groupIndex === PARTICLE_GROUP.OUTER_DUST
-          ? 0.28
+          ? 0.26
           : groupIndex === PARTICLE_GROUP.ORANGE_CORE
-            ? 0.7
+            ? 0.88
             : groupIndex === PARTICLE_GROUP.GOLD_NECK
-              ? 0.78
-              : 0.86;
+              ? 0.72
+              : 1;
       const brightnessScale =
         groupIndex === PARTICLE_GROUP.OUTER_DUST
           ? 0.5

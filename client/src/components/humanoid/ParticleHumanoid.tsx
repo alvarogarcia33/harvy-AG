@@ -22,6 +22,8 @@ import {
 import {
   emitterFragmentShader,
   emitterVertexShader,
+  faceEmitterFragmentShader,
+  faceEmitterVertexShader,
   humanoidFragmentShader,
   humanoidVertexShader,
 } from "./shaders/humanoidShaders";
@@ -61,8 +63,9 @@ function CameraFit({ aspect }: { aspect: number }) {
     const orthographic = camera as OrthographicCamera;
     const planeHeight = 4;
     const planeWidth = planeHeight * aspect;
+    orthographic.position.y = 0.12;
     orthographic.zoom =
-      Math.min(size.width / planeWidth, size.height / planeHeight) * 0.94;
+      Math.min(size.width / planeWidth, size.height / planeHeight) * 0.69;
     orthographic.updateProjectionMatrix();
   }, [aspect, camera, size.height, size.width]);
   return null;
@@ -215,6 +218,58 @@ function EmitterGlow() {
   );
 }
 
+function FaceEmitterGlow() {
+  const materialRef = useRef<ShaderMaterial>(null);
+  const animationStartRef = useRef<number | null>(null);
+  const geometry = useMemo(() => {
+    const next = new BufferGeometry();
+    next.setAttribute(
+      "position",
+      new BufferAttribute(
+        new Float32Array(FORMATION_CONFIG.faceEmitterPosition),
+        3,
+      ),
+    );
+    return next;
+  }, []);
+  const { gl } = useThree();
+  const uniforms = useMemo(
+    () => ({
+      uTime: { value: 0 },
+      uPixelRatio: { value: Math.min(gl.getPixelRatio(), 2) },
+      uEmitterSize: { value: FORMATION_CONFIG.faceEmitterSize },
+      uEmitterGlow: { value: FORMATION_CONFIG.faceEmitterGlow },
+      uCycleDuration: { value: FORMATION_CYCLE_DURATION },
+    }),
+    [gl],
+  );
+
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  useFrame(({ clock }) => {
+    if (!materialRef.current) return;
+    const elapsed = clock.getElapsedTime();
+    if (animationStartRef.current === null) animationStartRef.current = elapsed;
+    const naturalTime = elapsed - animationStartRef.current;
+    materialRef.current.uniforms.uTime.value = resolveAnimationTime(naturalTime);
+  });
+
+  return (
+    <points geometry={geometry} frustumCulled={false}>
+      <shaderMaterial
+        ref={materialRef}
+        uniforms={uniforms}
+        vertexShader={faceEmitterVertexShader}
+        fragmentShader={faceEmitterFragmentShader}
+        transparent
+        depthWrite={false}
+        depthTest={false}
+        blending={AdditiveBlending}
+        toneMapped={false}
+      />
+    </points>
+  );
+}
+
 export function ParticleHumanoid({
   sourceUrl = REFERENCE_IMAGE,
   maxParticles = FORMATION_CONFIG.particleCount,
@@ -279,6 +334,7 @@ export function ParticleHumanoid({
           <>
             <CameraFit aspect={targets.aspect} />
             <EmitterGlow />
+            <FaceEmitterGlow />
             <ParticleCloud targets={targets} />
           </>
         ) : null}

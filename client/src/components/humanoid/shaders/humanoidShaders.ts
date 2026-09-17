@@ -29,6 +29,7 @@ export const humanoidVertexShader = /* glsl */ `
   varying float vAlpha;
   varying float vTravel;
   varying float vSpark;
+  varying float vWarmFaceMask;
 
   vec3 cubicBezier(vec3 p0, vec3 p1, vec3 p2, vec3 p3, float t) {
     float oneMinusT = 1.0 - t;
@@ -105,6 +106,11 @@ export const humanoidVertexShader = /* glsl */ `
     vGroup = aGroup;
     vTravel = travelEnvelope;
     vSpark = sparkEnvelope;
+    vec2 warmFaceSpace = vec2(
+      aTargetPosition.x / 0.56,
+      (aTargetPosition.y - 0.52) / 0.62
+    );
+    vWarmFaceMask = smoothstep(1.06, 0.82, length(warmFaceSpace));
   }
 `;
 
@@ -115,6 +121,7 @@ export const humanoidFragmentShader = /* glsl */ `
   varying float vAlpha;
   varying float vTravel;
   varying float vSpark;
+  varying float vWarmFaceMask;
 
   void main() {
     vec2 center = gl_PointCoord - vec2(0.5);
@@ -128,18 +135,29 @@ export const humanoidFragmentShader = /* glsl */ `
     float gold = 1.0 - step(0.45, abs(vGroup - 2.0));
     float dust = step(2.5, vGroup);
     float weak = smoothstep(0.04, 0.3, vBrightness);
-    float groupAlpha = mix(1.0, 0.28, dust);
+    float warmVisibility = mix(1.0, vWarmFaceMask, orange);
+    float groupAlpha = mix(1.0, 0.28, dust) * warmVisibility;
     float haloStrength =
-      0.26 + cyan * 0.035 + gold * 0.045 - orange * 0.1 - dust * 0.15;
+      0.24 + cyan * 0.11 + orange * 0.26 + gold * 0.08 - dust * 0.17;
     float alpha = (core + halo * haloStrength)
       * mix(0.3, 1.0, weak)
       * groupAlpha
       * vAlpha
-      * 1.52;
+      * 1.58;
+    vec3 cyanColor = vec3(0.0, 0.48, 1.0);
+    vec3 faceAuroraColor = vec3(1.0, 0.19, 0.015);
+    vec3 goldColor = vec3(1.0, 0.5, 0.035);
+    vec3 mappedColor = vColor;
+    mappedColor = mix(mappedColor, cyanColor, cyan * 0.84);
+    mappedColor = mix(mappedColor, faceAuroraColor, orange);
+    mappedColor = mix(mappedColor, goldColor, gold * 0.72);
     float groupEmission =
-      1.18 + cyan * 1.48 + orange * 2.3 + gold * 0.5 - dust * 0.5;
-    vec3 color = vColor * mix(0.95, 2.05, weak) * groupEmission;
-    color += vColor * (vTravel * 0.12 + vSpark * 0.9);
+      1.08 + cyan * 2.35 + orange * 3.25 + gold * 1.35 - dust * 0.62;
+    vec3 color = mappedColor * mix(0.92, 2.15, weak) * groupEmission;
+    color += mappedColor * (vTravel * 0.16 + vSpark * 1.0);
+    color += cyanColor * cyan * core * 0.72;
+    color += vec3(1.0, 0.82, 0.36) * orange * core * 1.42;
+    color += faceAuroraColor * orange * (core * 2.25 + halo * 1.24);
     gl_FragColor = vec4(color, alpha);
   }
 `;
@@ -161,6 +179,24 @@ export const emitterVertexShader = /* glsl */ `
   }
 `;
 
+export const faceEmitterVertexShader = /* glsl */ `
+  uniform float uTime;
+  uniform float uPixelRatio;
+  uniform float uEmitterSize;
+  uniform float uCycleDuration;
+  varying float vPulse;
+
+  void main() {
+    float cycleTime = mod(uTime, uCycleDuration);
+    float reveal = smoothstep(2.15, 3.35, cycleTime);
+    vPulse = reveal * (0.88 + 0.12 * sin(uTime * 4.2));
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * viewPosition;
+    gl_PointSize =
+      uEmitterSize * uPixelRatio * (0.92 + 0.08 * sin(uTime * 3.7));
+  }
+`;
+
 export const emitterFragmentShader = /* glsl */ `
   uniform float uEmitterGlow;
   varying float vPulse;
@@ -173,10 +209,37 @@ export const emitterFragmentShader = /* glsl */ `
     float cyanCore = smoothstep(0.24, 0.055, distanceToCenter);
     float halo = smoothstep(0.5, 0.12, distanceToCenter);
     vec3 color =
-      vec3(1.0) * whiteCore * 1.5 +
-      vec3(0.0, 0.78, 1.0) * cyanCore * 1.25 +
-      vec3(0.0, 0.32, 1.0) * halo * 0.62;
-    float alpha = (whiteCore + cyanCore * 0.86 + halo * 0.34) * vPulse;
+      vec3(1.0) * whiteCore * 1.72 +
+      vec3(0.0, 0.72, 1.0) * cyanCore * 1.8 +
+      vec3(0.0, 0.28, 1.0) * halo * 0.94;
+    float alpha = (whiteCore + cyanCore * 0.96 + halo * 0.46) * vPulse;
+    gl_FragColor = vec4(color * uEmitterGlow, alpha);
+  }
+`;
+
+export const faceEmitterFragmentShader = /* glsl */ `
+  uniform float uEmitterGlow;
+  varying float vPulse;
+
+  void main() {
+    vec2 center = gl_PointCoord - vec2(0.5);
+    float distanceToCenter = length(center);
+    if (distanceToCenter > 0.5) discard;
+    float whiteCore = smoothstep(0.07, 0.0, distanceToCenter);
+    float amberCore = smoothstep(0.17, 0.025, distanceToCenter);
+    float innerHalo = smoothstep(0.38, 0.07, distanceToCenter);
+    float outerAura = smoothstep(0.5, 0.16, distanceToCenter);
+    vec3 color =
+      vec3(1.0, 0.94, 0.72) * whiteCore * 1.62 +
+      vec3(1.0, 0.48, 0.035) * amberCore * 1.8 +
+      vec3(1.0, 0.19, 0.012) * innerHalo * 1.16 +
+      vec3(0.88, 0.055, 0.004) * outerAura * 0.78;
+    float alpha =
+      (whiteCore +
+        amberCore * 0.96 +
+        innerHalo * 0.58 +
+        outerAura * 0.34) *
+      vPulse;
     gl_FragColor = vec4(color * uEmitterGlow, alpha);
   }
 `;
