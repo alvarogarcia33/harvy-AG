@@ -14,7 +14,7 @@ export const FORMATION_CONFIG = {
   emitterPosition: [-0.078, -1.72, 0.04] as const,
   faceEmitterSize: 330,
   faceEmitterGlow: 1.52,
-  faceEmitterPosition: [-0.078, 0.48, 0.08] as const,
+  faceEmitterPosition: [-0.108, 0.48, 0.08] as const,
   spawnRadius: 0.055,
   dustDensity: 0.1,
   loopAnimation: true,

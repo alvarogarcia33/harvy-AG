@@ -743,7 +743,7 @@ export async function buildParticleTargets(
     3000,
     Math.floor(maxParticles * FORMATION_CONFIG.dustDensity),
   );
-  const ratios = [0.62, 0.11, 0.13];
+  const ratios = [0.61, 0.14, 0.13];
   const quotas = [
     Math.floor(maxParticles * ratios[0]),
     Math.floor(maxParticles * ratios[1]),
@@ -804,6 +804,9 @@ export async function buildParticleTargets(
         pixel.y / Math.max(1, crop.height - 1);
       let targetX = (normalizedTargetX - 0.5) * worldWidth;
       let targetY = (0.5 - normalizedTargetY) * worldHeight;
+      if (groupIndex === PARTICLE_GROUP.ORANGE_CORE) {
+        targetX -= 0.03;
+      }
       if (
         normalizedTargetY < 0.17 &&
         (groupIndex === PARTICLE_GROUP.CYAN_STRUCTURE ||
@@ -819,7 +822,7 @@ export async function buildParticleTargets(
         const upperBandEase =
           upperBand * upperBand * (3 - 2 * upperBand);
         targetY -=
-          (0.19 - crownArc * 0.085) * upperBandEase;
+          (0.3 - crownArc * 0.13) * upperBandEase;
       }
       if (groupIndex !== PARTICLE_GROUP.GOLD_NECK) {
         const headDropProgress = Math.min(
